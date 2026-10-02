@@ -1,0 +1,69 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get code
+        uses: actions/checkout@v4
+
+      - name: Find project
+        run: |
+          if [ -f settings.gradle.kts ]; then
+            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+          elif [ -f UsarBrowser.zip ]; then
+            unzip -q -o UsarBrowser.zip -d unpacked
+            echo "PROJECT_DIR=unpacked/UsarBrowser" >> "$GITHUB_ENV"
+          else
+            echo "::error::UsarBrowser.zip not found in the repository root"
+            exit 1
+          fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -o pipefail
+          gradle assembleDebug --console=plain -Pusar.googleWebClientId="${{ secrets.GOOGLE_WEB_CLIENT_ID }}" 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Show errors
+        if: failure()
+        run: |
+          LOG="$GITHUB_WORKSPACE/build.log"
+          [ -f "$LOG" ] || exit 0
+          {
+            echo "## Build errors"
+            echo '```'
+            grep -E "^e: |error: |AAPT: error|resource .* not found" "$LOG" | sed "s#file://$GITHUB_WORKSPACE/##" | head -60
+            echo
+            grep -A 15 "What went wrong" "$LOG" | head -60
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Usar-APK
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
